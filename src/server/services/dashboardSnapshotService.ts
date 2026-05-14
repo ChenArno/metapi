@@ -47,7 +47,9 @@ export type DashboardSummaryPayload = {
 export type DashboardInsightsPayload = {
   siteAvailability: ReturnType<
     typeof buildSiteAvailabilitySummariesFromHourlyAggregates
-  >;
+  > & Array<{
+    failureReasons?: Array<{ label: string; count: number }>;
+  }>;
   modelAnalysis: ReturnType<typeof buildModelAnalysisFromDailyUsage>;
 };
 
@@ -256,7 +258,42 @@ async function loadDashboardInsightsPayload(): Promise<DashboardInsightsPayload>
   const modelAnalysisSinceDay = getLocalRangeStartDayKey(7);
   await runUsageAggregationProjectionPass();
 
-  const [activeSites, siteAvailabilityRows, modelDayRows] =
+  const classifySiteFailureLabel = (input: {
+    httpStatus?: number | null;
+    errorMessage?: string | null;
+  }): string => {
+    const httpStatus = Number(input.httpStatus || 0);
+    const text = String(input.errorMessage || "").trim().toLowerCase();
+    if (text.includes("cloudflare") || text.includes("turnstile")) {
+      return "Cloudflare / 验证";
+    }
+    if (httpStatus === 401 || httpStatus === 403 || text.includes("forbidden") || text.includes("invalid token")) {
+      return "认证失效";
+    }
+    if (
+      httpStatus >= 500
+      || text.includes("bad gateway")
+      || text.includes("gateway")
+      || text.includes("upstream")
+    ) {
+      return "上游 5xx";
+    }
+    if (
+      text.includes("timeout")
+      || text.includes("timed out")
+      || text.includes("econnreset")
+      || text.includes("econnrefused")
+      || text.includes("connection reset")
+    ) {
+      return "超时 / 网络";
+    }
+    if (text.includes("unsupported model") || text.includes("model not supported") || text.includes("unknown model")) {
+      return "模型不支持";
+    }
+    return "请求失败";
+  };
+
+  const [activeSites, siteAvailabilityRows, modelDayRows, recentFailedProxyLogs] =
     await Promise.all([
       db
         .select({
@@ -280,6 +317,26 @@ async function loadDashboardInsightsPayload(): Promise<DashboardInsightsPayload>
         .from(schema.modelDayUsage)
         .where(gte(schema.modelDayUsage.localDay, modelAnalysisSinceDay))
         .all(),
+      db
+        .select({
+          siteId: schema.sites.id,
+          httpStatus: schema.proxyLogs.httpStatus,
+          errorMessage: schema.proxyLogs.errorMessage,
+        })
+        .from(schema.proxyLogs)
+        .innerJoin(
+          schema.accounts,
+          eq(schema.proxyLogs.accountId, schema.accounts.id),
+        )
+        .innerJoin(schema.sites, eq(schema.accounts.siteId, schema.sites.id))
+        .where(
+          and(
+            gte(schema.proxyLogs.createdAt, siteAvailabilitySinceUtc),
+            eq(schema.sites.status, "active"),
+            sql<boolean>`coalesce(${schema.proxyLogs.status}, '') <> 'success'`,
+          ),
+        )
+        .all(),
     ]);
 
   const sortedSites = activeSites.sort(
@@ -294,6 +351,17 @@ async function loadDashboardInsightsPayload(): Promise<DashboardInsightsPayload>
     },
   );
   const activeSiteIdSet = new Set(sortedSites.map((site) => site.id));
+  const failureReasonsBySiteId = new Map<number, Map<string, number>>();
+  for (const row of recentFailedProxyLogs) {
+    const siteId = Number(row.siteId);
+    if (!Number.isFinite(siteId) || siteId <= 0 || !activeSiteIdSet.has(siteId)) continue;
+    const label = classifySiteFailureLabel(row);
+    if (!failureReasonsBySiteId.has(siteId)) {
+      failureReasonsBySiteId.set(siteId, new Map<string, number>());
+    }
+    const bucket = failureReasonsBySiteId.get(siteId)!;
+    bucket.set(label, (bucket.get(label) || 0) + 1);
+  }
 
   return {
     siteAvailability: buildSiteAvailabilitySummariesFromHourlyAggregates(
@@ -310,7 +378,15 @@ async function loadDashboardInsightsPayload(): Promise<DashboardInsightsPayload>
           latencyCount: row.latencyCount,
         })),
       siteAvailabilityNow,
-    ),
+    ).map((site) => ({
+      ...site,
+      failureReasons: Array.from(
+        failureReasonsBySiteId.get(site.siteId)?.entries() || [],
+      )
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 3)
+        .map(([label, count]) => ({ label, count })),
+    })),
     modelAnalysis: buildModelAnalysisFromDailyUsage(
       modelDayRows
         .filter((row) => activeSiteIdSet.has(row.siteId))

@@ -982,16 +982,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({}),
     }),
-  getRouteDecision: (model: string) =>
-    request(`/api/routes/decision?model=${encodeURIComponent(model)}`),
+  getRouteDecision: (model: string, options?: { downstreamKeyId?: number }) =>
+    request(`/api/routes/decision?${buildQueryString({
+      model,
+      ...(options?.downstreamKeyId ? { downstreamKeyId: options.downstreamKeyId } : {}),
+    })}`),
   getRouteDecisionsBatch: (
     models: string[],
-    options?: { refreshPricingCatalog?: boolean; persistSnapshots?: boolean },
+    options?: { downstreamKeyId?: number; refreshPricingCatalog?: boolean; persistSnapshots?: boolean },
   ) =>
     request("/api/routes/decision/batch", {
       method: "POST",
       body: JSON.stringify({
         models,
+        ...(options?.downstreamKeyId ? { downstreamKeyId: options.downstreamKeyId } : {}),
         ...(options?.refreshPricingCatalog
           ? { refreshPricingCatalog: true }
           : {}),
@@ -1000,12 +1004,13 @@ export const api = {
     }),
   getRouteDecisionsByRouteBatch: (
     items: Array<{ routeId: number; model: string }>,
-    options?: { refreshPricingCatalog?: boolean; persistSnapshots?: boolean },
+    options?: { downstreamKeyId?: number; refreshPricingCatalog?: boolean; persistSnapshots?: boolean },
   ) =>
     request("/api/routes/decision/by-route/batch", {
       method: "POST",
       body: JSON.stringify({
         items,
+        ...(options?.downstreamKeyId ? { downstreamKeyId: options.downstreamKeyId } : {}),
         ...(options?.refreshPricingCatalog
           ? { refreshPricingCatalog: true }
           : {}),
@@ -1014,12 +1019,13 @@ export const api = {
     }),
   getRouteWideDecisionsBatch: (
     routeIds: number[],
-    options?: { refreshPricingCatalog?: boolean; persistSnapshots?: boolean },
+    options?: { downstreamKeyId?: number; refreshPricingCatalog?: boolean; persistSnapshots?: boolean },
   ) =>
     request("/api/routes/decision/route-wide/batch", {
       method: "POST",
       body: JSON.stringify({
         routeIds,
+        ...(options?.downstreamKeyId ? { downstreamKeyId: options.downstreamKeyId } : {}),
         ...(options?.refreshPricingCatalog
           ? { refreshPricingCatalog: true }
           : {}),

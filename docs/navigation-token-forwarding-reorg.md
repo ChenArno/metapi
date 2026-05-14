@@ -129,6 +129,38 @@ Owns:
    - Expired Sub2API accounts with managed `refresh_token` are included in scheduled refresh.
    - Successful refresh writes back the new access token and restores the account to active.
 
+## Implemented Follow-up Slice
+
+The follow-up slice tightened the operator experience around health and observability without changing the overall IA:
+
+1. Split account health into two visible surfaces on `/accounts`:
+   - `API 状态`
+   - `签到状态`
+
+   This prevents check-in-only failures from visually implying that proxy forwarding is also broken.
+
+2. Kept direct API Key connections inside link management, but made their status semantics clearer:
+   - proxy-only connections default to API-forwarding health
+   - unsupported check-in is shown as a separate non-error state
+
+3. Simplified the dashboard observability section:
+   - fixed three-column desktop layout
+   - compact per-site cards
+   - expandable 24h availability strip
+   - per-site failed-reason summary chips
+
+4. Downstream-key-aware route decision diagnostics were added at the API layer so forwarding policy debugging is aligned with:
+   - allowed routes
+   - site pools
+   - excluded sites
+   - excluded credentials
+
+This keeps the new information architecture intact while making it much easier to answer:
+
+- Is this account bad, or is only check-in bad?
+- Is this site excluded by downstream policy, or is it actually unhealthy?
+- Is the site mainly failing because of Cloudflare, auth expiry, upstream 5xx, or network timeouts?
+
 ## Acceptance Criteria
 
 - Link management no longer presents account token management as a same-level tab.

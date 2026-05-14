@@ -208,7 +208,10 @@ async function fetchTodayIncomeFromLogs(params: {
   return Math.round(totalIncome * 1_000_000) / 1_000_000;
 }
 
-async function tryAutoRelogin(account: any, site: any): Promise<string | null> {
+async function tryAutoRelogin(
+  account: any,
+  site: any,
+): Promise<{ accessToken: string; platformUserId?: number } | null> {
   const adapter = getAdapter(site.platform);
   if (!adapter) return null;
 
@@ -224,16 +227,26 @@ async function tryAutoRelogin(account: any, site: any): Promise<string | null> {
   );
   if (!loginResult.success || !loginResult.accessToken) return null;
 
+  const nextPlatformUserId = typeof loginResult.platformUserId === 'number' && Number.isFinite(loginResult.platformUserId) && loginResult.platformUserId > 0
+    ? Math.trunc(loginResult.platformUserId)
+    : undefined;
+
   await db.update(schema.accounts)
     .set({
       accessToken: loginResult.accessToken,
+      extraConfig: nextPlatformUserId
+        ? mergeAccountExtraConfig(account.extraConfig, { platformUserId: nextPlatformUserId })
+        : account.extraConfig,
       status: account.status === 'expired' ? 'active' : account.status,
       updatedAt: new Date().toISOString(),
     })
     .where(eq(schema.accounts.id, account.id))
     .run();
 
-  return loginResult.accessToken;
+  return {
+    accessToken: loginResult.accessToken,
+    platformUserId: nextPlatformUserId,
+  };
 }
 
 export async function refreshBalance(accountId: number) {
@@ -277,7 +290,7 @@ export async function refreshBalance(accountId: number) {
     };
   }
 
-  const platformUserId = resolvePlatformUserId(account.extraConfig, account.username);
+  let platformUserId = resolvePlatformUserId(account.extraConfig, account.username);
   let activeAccessToken = account.accessToken;
   let activeExtraConfig = account.extraConfig;
   let balanceInfo: BalanceInfo | null = null;
@@ -343,9 +356,12 @@ export async function refreshBalance(accountId: number) {
         await handleBalanceError(retryErr);
       }
     } else if (shouldAttemptAutoRelogin(message)) {
-      const refreshedAccessToken = await tryAutoRelogin(account, site);
-      if (refreshedAccessToken) {
-        activeAccessToken = refreshedAccessToken;
+      const refreshedSession = await tryAutoRelogin(account, site);
+      if (refreshedSession) {
+        activeAccessToken = refreshedSession.accessToken;
+        if (refreshedSession.platformUserId) {
+          platformUserId = refreshedSession.platformUserId;
+        }
         try {
           balanceInfo = await readBalance(activeAccessToken);
         } catch (retryErr: any) {

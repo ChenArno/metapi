@@ -33,6 +33,30 @@ Make Metapi useful as a controllable upstream meta-gateway:
 - Treat custom check-in as data plus a small execution engine, not as more platform-specific branches.
 - Make route behavior observable before making it smarter.
 
+## Current Delivery Status
+
+Implemented in the current refactor slice:
+
+- New API auto relogin now refreshes and persists the upstream `platformUserId` after a successful relogin, so balance refresh and check-in retries do not stay pinned to a stale user id.
+- Routing and route explanation now accept downstream-key-aware policy context, so diagnostics reflect the real site pool, allowed routes, and excluded credentials used by a downstream key.
+- Check-in failure and proxy usability are now treated as separate concerns in the product surface:
+  - check-in-only degraded state is preserved for account maintenance
+  - route selection no longer treats check-in-only degradation as a proxy routing blocker
+- Account management now exposes separate `API 状态` and `签到状态` badges instead of one blended health badge.
+- Dashboard site observability has been reduced to a denser tri-column card layout with per-site expand/collapse for the 24h strip.
+- Site observability cards now include a lightweight failed-request reason summary, grouped into high-signal labels such as:
+  - `Cloudflare / 验证`
+  - `认证失效`
+  - `上游 5xx`
+  - `超时 / 网络`
+  - `模型不支持`
+
+This means the current slice already covers the most immediate operator pain:
+
+- a usable site not being selected
+- difficulty proving whether the blocker is routing policy, stale login state, or site instability
+- check-in failures visually masking otherwise healthy API forwarding
+
 ## Phase 1: Simple Setup Workflow
 
 Replace the current multi-page setup burden with one guided path.

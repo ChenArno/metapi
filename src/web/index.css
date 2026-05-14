@@ -6551,16 +6551,16 @@ textarea {
   background: var(--color-primary-soft, color-mix(in srgb, var(--color-primary) 8%, transparent));
 }
 
-/* Grid layout: 2 columns by default, 3 on wide screens */
+/* Grid layout: 3 columns by default, 2 on medium screens */
 .site-observability-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
-@media (min-width: 1400px) {
+@media (max-width: 1279px) {
   .site-observability-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -6576,6 +6576,7 @@ textarea {
   border: 1px solid var(--color-border-light);
   background: color-mix(in srgb, var(--color-bg) 88%, white);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  min-height: 122px;
 }
 
 .site-observability-card:hover {
@@ -6600,12 +6601,20 @@ textarea {
   margin-bottom: 6px;
 }
 
+.site-observability-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .site-observability-card-title {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
   overflow: hidden;
+  flex-wrap: wrap;
 }
 
 .site-observability-card-title .site-observability-site-name {
@@ -6625,6 +6634,46 @@ textarea {
   color: var(--color-text-secondary);
   margin-bottom: 8px;
   flex-wrap: wrap;
+}
+
+.site-observability-card-details {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-light);
+}
+
+.site-observability-reason-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.site-observability-reason-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-border) 26%, transparent);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.9;
+  white-space: nowrap;
+}
+
+.site-observability-reason-chip b {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.site-observability-card-detail-label {
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
 }
 
 .site-observability-metric-main {
@@ -6656,6 +6705,42 @@ textarea {
   border-color: var(--color-primary);
   color: var(--color-primary);
   background: var(--color-primary-soft, color-mix(in srgb, var(--color-primary) 8%, transparent));
+}
+
+.site-observability-toggle-btn--card {
+  padding-inline: 10px;
+}
+
+.site-observability-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.8;
+  white-space: nowrap;
+}
+
+.site-observability-status--good {
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+  color: var(--color-success);
+}
+
+.site-observability-status--warn {
+  background: color-mix(in srgb, var(--color-warning) 16%, transparent);
+  color: var(--color-warning-text, #b45309);
+}
+
+.site-observability-status--bad {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  color: var(--color-danger);
+}
+
+.site-observability-status--idle {
+  background: color-mix(in srgb, var(--color-border) 30%, transparent);
+  color: var(--color-text-muted);
 }
 
 .site-availability-strip-compact {

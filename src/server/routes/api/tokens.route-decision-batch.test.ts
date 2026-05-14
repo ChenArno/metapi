@@ -69,6 +69,9 @@ describe('POST /api/routes/decision/batch', () => {
 
   beforeEach(async () => {
     seedId = 0;
+    await db.delete(schema.downstreamApiKeys).run();
+    await db.delete(schema.sitePoolMembers).run();
+    await db.delete(schema.sitePools).run();
     await db.delete(schema.routeChannels).run();
     await db.delete(schema.tokenRoutes).run();
     await db.delete(schema.accounts).run();
@@ -237,5 +240,99 @@ describe('POST /api/routes/decision/batch', () => {
 
     const totalProbability = (decision?.candidates || []).reduce((sum, candidate) => sum + (candidate.probability || 0), 0);
     expect(totalProbability).toBeCloseTo(100, 1);
+  });
+
+  it('scopes route decisions by downstream key policy', async () => {
+    const route = await db.insert(schema.tokenRoutes).values({
+      modelPattern: 'gpt-4o-mini',
+      enabled: true,
+    }).returning().get();
+
+    const siteA = await db.insert(schema.sites).values({
+      name: 'policy-site-a',
+      url: 'https://policy-site-a.example.com',
+      platform: 'new-api',
+      status: 'active',
+    }).returning().get();
+    const accountA = await db.insert(schema.accounts).values({
+      siteId: siteA.id,
+      username: 'policy-user-a',
+      accessToken: 'policy-access-a',
+      apiToken: 'policy-api-a',
+      status: 'active',
+    }).returning().get();
+    const channelA = await db.insert(schema.routeChannels).values({
+      routeId: route.id,
+      accountId: accountA.id,
+      tokenId: null,
+      priority: 0,
+      weight: 10,
+      enabled: true,
+    }).returning().get();
+
+    const siteB = await db.insert(schema.sites).values({
+      name: 'policy-site-b',
+      url: 'https://policy-site-b.example.com',
+      platform: 'new-api',
+      status: 'active',
+    }).returning().get();
+    const accountB = await db.insert(schema.accounts).values({
+      siteId: siteB.id,
+      username: 'policy-user-b',
+      accessToken: 'policy-access-b',
+      apiToken: 'policy-api-b',
+      status: 'active',
+    }).returning().get();
+    const channelB = await db.insert(schema.routeChannels).values({
+      routeId: route.id,
+      accountId: accountB.id,
+      tokenId: null,
+      priority: 0,
+      weight: 10,
+      enabled: true,
+    }).returning().get();
+
+    const pool = await db.insert(schema.sitePools).values({
+      name: 'policy-pool',
+      enabled: true,
+    }).returning().get();
+    await db.insert(schema.sitePoolMembers).values({
+      poolId: pool.id,
+      siteId: siteA.id,
+    }).run();
+
+    const downstreamKey = await db.insert(schema.downstreamApiKeys).values({
+      name: 'policy-key',
+      key: 'sk-policy-key',
+      assignmentMode: 'pool',
+      sitePoolId: pool.id,
+      allowedRouteIds: JSON.stringify([route.id]),
+      enabled: true,
+    }).returning().get();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/routes/decision/batch',
+      payload: {
+        models: ['gpt-4o-mini'],
+        downstreamKeyId: downstreamKey.id,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      success: boolean;
+      decisions: Record<string, {
+        selectedChannelId?: number;
+        summary: string[];
+        candidates: Array<{ channelId: number; eligible: boolean; reason: string }>;
+      }>;
+    };
+    const decision = body.decisions['gpt-4o-mini'];
+    expect(body.success).toBe(true);
+    expect(decision?.selectedChannelId).toBe(channelA.id);
+    expect(decision?.summary.join(' ')).toContain('下游策略：限定路由 1，站点池 1');
+    expect(decision?.candidates.find((candidate) => candidate.channelId === channelA.id)?.eligible).toBe(true);
+    expect(decision?.candidates.find((candidate) => candidate.channelId === channelB.id)?.reason).toContain('站点不在下游密钥站点池');
   });
 });

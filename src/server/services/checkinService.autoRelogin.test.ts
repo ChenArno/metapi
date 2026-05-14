@@ -130,6 +130,51 @@ describe('checkinService auto relogin', () => {
     expect(updateSetMock).toHaveBeenCalledWith(expect.objectContaining({ accessToken: 'fresh-token' }));
   });
 
+  it('retries checkin with refreshed platform user id after auto relogin', async () => {
+    selectAllMock.mockReturnValue([
+      {
+        accounts: {
+          id: 21,
+          username: 'ng7043',
+          accessToken: 'expired-token',
+          status: 'active',
+          extraConfig: JSON.stringify({
+            platformUserId: 7043,
+            autoRelogin: { username: 'ng7043', passwordCipher: 'cipher' },
+          }),
+        },
+        sites: {
+          id: 21,
+          name: 'zhiyunapi',
+          url: 'https://zhiyunapi.cc',
+          platform: 'new-api',
+        },
+      },
+    ]);
+
+    adapterMock.checkin
+      .mockResolvedValueOnce({ success: false, message: 'Unauthorized, not logged in and no access token provided' })
+      .mockResolvedValueOnce({ success: true, message: '今日已签到' });
+    decryptPasswordMock.mockReturnValue('plain-password');
+    adapterMock.login.mockResolvedValue({
+      success: true,
+      accessToken: 'fresh-cookie-session',
+      platformUserId: 6820,
+    });
+
+    const { checkinAccount } = await import('./checkinService.js');
+    const result = await checkinAccount(21);
+
+    expect(result.success).toBe(true);
+    expect(adapterMock.checkin).toHaveBeenCalledTimes(2);
+    expect(adapterMock.checkin.mock.calls[0][2]).toBe(7043);
+    expect(adapterMock.checkin.mock.calls[1][2]).toBe(6820);
+    expect(updateSetMock).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'fresh-cookie-session',
+      extraConfig: expect.stringContaining('"platformUserId":6820'),
+    }));
+  });
+
   it('passes guessed platform user id when config does not include it', async () => {
     selectAllMock.mockReturnValue([
       {

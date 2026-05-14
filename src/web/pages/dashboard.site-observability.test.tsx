@@ -61,6 +61,10 @@ describe('Dashboard site observability panel', () => {
         failedCount: 2,
         availabilityPercent: 75,
         averageLatencyMs: 320,
+        failureReasons: [
+          { label: '上游 5xx', count: 1 },
+          { label: 'Cloudflare / 验证', count: 1 },
+        ],
         buckets: Array.from({ length: 24 }, (_, index) => ({
           startUtc: new Date(Date.UTC(2026, 2, 11, index, 0, 0)).toISOString(),
           label: `2026-03-11 ${String(index).padStart(2, '0')}:00:00`,
@@ -109,22 +113,36 @@ describe('Dashboard site observability panel', () => {
         && node.props.className.includes('site-observability-panel')
       ));
 
-      const cells = panel.findAll((node) => (
-        node.type === 'a'
-        && typeof node.props.className === 'string'
-        && node.props.className.includes('site-availability-cell')
-      ));
-
       const logLink = panel.find((node) => (
         node.type === 'a'
         && typeof node.props.className === 'string'
         && node.props.className.includes('site-observability-log-link')
       ));
 
+      const expandButton = panel.find((node) => (
+        node.type === 'button'
+        && typeof node.props.className === 'string'
+        && node.props.className.includes('site-observability-toggle-btn--card')
+        && collectText(node).trim() === '展开'
+      ));
+
+      await act(async () => {
+        expandButton.props.onClick();
+      });
+      await flushMicrotasks();
+
+      const cells = panel.findAll((node) => (
+        node.type === 'a'
+        && typeof node.props.className === 'string'
+        && node.props.className.includes('site-availability-cell')
+      ));
+
       expect(collectText(panel)).toContain('站点可用性观测');
       expect(collectText(panel)).toContain('Demo Site');
       expect(collectText(panel)).toContain('75%');
       expect(collectText(panel)).toContain('320ms');
+      expect(collectText(panel)).toContain('上游 5xx');
+      expect(collectText(panel)).toContain('Cloudflare / 验证');
       expect(logLink.props.title).toBe('查看日志');
       expect(cells).toHaveLength(24);
       expect(String(cells[0]?.props.title || '')).toContain('可用性 100%');
@@ -133,6 +151,57 @@ describe('Dashboard site observability panel', () => {
       expect(String(cells[0]?.props['data-tooltip'] || '')).toContain('可用性：100%');
       expect(String(cells[0]?.props['data-tooltip'] || '')).toContain('成功/失败：1/0');
       expect(String(logLink.props.href || logLink.props.to || '')).toContain('/logs?siteId=1');
+    } finally {
+      root?.unmount();
+    }
+  });
+
+  it('uses collapsible site cards and reveals the 24h strip after expanding', async () => {
+    let root!: WebTestRenderer;
+
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter initialEntries={['/']}>
+            <ToastProvider>
+              <Dashboard />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+
+      const panel = root!.root.find((node) => (
+        typeof node.props.className === 'string'
+        && node.props.className.includes('site-observability-panel')
+      ));
+
+      let cells = panel.findAll((node) => (
+        node.type === 'a'
+        && typeof node.props.className === 'string'
+        && node.props.className.includes('site-availability-cell')
+      ));
+      expect(cells).toHaveLength(0);
+
+      const expandButton = panel.find((node) => (
+        node.type === 'button'
+        && typeof node.props.className === 'string'
+        && node.props.className.includes('site-observability-toggle-btn--card')
+        && collectText(node).trim() === '展开'
+      ));
+
+      await act(async () => {
+        expandButton.props.onClick();
+      });
+      await flushMicrotasks();
+
+      cells = panel.findAll((node) => (
+        node.type === 'a'
+        && typeof node.props.className === 'string'
+        && node.props.className.includes('site-availability-cell')
+      ));
+      expect(cells).toHaveLength(24);
+      expect(collectText(panel)).toContain('最近 24 小时');
     } finally {
       root?.unmount();
     }

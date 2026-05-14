@@ -80,6 +80,7 @@ type SiteAvailabilitySummary = {
   availabilityPercent: number | null;
   averageLatencyMs: number | null;
   buckets: SiteAvailabilityBucket[];
+  failureReasons?: Array<{ label: string; count: number }>;
 };
 
 function formatAvailabilityPercent(value: number | null | undefined): string {
@@ -124,6 +125,26 @@ function getAvailabilityColor(value: number | null | undefined): string {
   }
 
   return `rgb(${r}, ${g}, ${b})`;
+}
+
+function getAvailabilityTone(value: number | null | undefined): {
+  label: string;
+  className: string;
+} {
+  if (
+    typeof value !== "number" ||
+    Number.isNaN(value) ||
+    !Number.isFinite(value)
+  ) {
+    return { label: "无样本", className: "site-observability-status site-observability-status--idle" };
+  }
+  if (value >= 99) {
+    return { label: "稳定", className: "site-observability-status site-observability-status--good" };
+  }
+  if (value >= 80) {
+    return { label: "波动", className: "site-observability-status site-observability-status--warn" };
+  }
+  return { label: "异常", className: "site-observability-status site-observability-status--bad" };
 }
 
 function padDateTimeSegment(value: number): string {
@@ -238,6 +259,7 @@ export default function Dashboard({
   >({});
   const [trendDays, setTrendDays] = useState(7);
   const [showInactiveSites, setShowInactiveSites] = useState(false);
+  const [expandedSiteIds, setExpandedSiteIds] = useState<number[]>([]);
   const toast = useToast();
   const normalizedAdminName = (adminName || "").trim() || "\u7ba1\u7406\u5458";
 
@@ -377,6 +399,18 @@ export default function Dashboard({
       }
     };
   }, []);
+
+  useEffect(() => {
+    const siteRows: SiteAvailabilitySummary[] = Array.isArray(
+      insightsData?.siteAvailability,
+    )
+      ? insightsData.siteAvailability
+      : [];
+    const visibleIds = new Set(siteRows.map((site) => site.siteId));
+    setExpandedSiteIds((current) =>
+      current.filter((siteId) => visibleIds.has(siteId)),
+    );
+  }, [insightsData]);
 
   if (loading && !data) {
     return (
@@ -526,6 +560,27 @@ export default function Dashboard({
   const siteAvailability = showInactiveSites
     ? [...activeSites, ...inactiveSites]
     : activeSites;
+  const allVisibleSiteIds = siteAvailability.map((site) => site.siteId);
+  const allVisibleExpanded = allVisibleSiteIds.length > 0
+    && allVisibleSiteIds.every((siteId) => expandedSiteIds.includes(siteId));
+
+  const toggleSiteExpanded = (siteId: number) => {
+    setExpandedSiteIds((current) => (
+      current.includes(siteId)
+        ? current.filter((id) => id !== siteId)
+        : [...current, siteId]
+    ));
+  };
+
+  const toggleAllVisibleSitesExpanded = () => {
+    setExpandedSiteIds((current) => {
+      if (allVisibleExpanded) {
+        return current.filter((siteId) => !allVisibleSiteIds.includes(siteId));
+      }
+      const merged = new Set([...current, ...allVisibleSiteIds]);
+      return Array.from(merged);
+    });
+  };
 
   const getLatencyColor = (ms: number) =>
     ms <= 500
@@ -1096,6 +1151,14 @@ export default function Dashboard({
               />
               <span className="site-observability-legend-text">高</span>
             </div>
+            {siteAvailability.length > 0 && (
+              <button
+                className="site-observability-toggle-btn"
+                onClick={toggleAllVisibleSitesExpanded}
+              >
+                {allVisibleExpanded ? "收起全部" : "展开全部"}
+              </button>
+            )}
             {inactiveSites.length > 0 && (
               <button
                 className="site-observability-toggle-btn"
@@ -1135,10 +1198,16 @@ export default function Dashboard({
         ) : siteAvailability.length > 0 ? (
           <div className="site-observability-grid">
             {siteAvailability.map((site) => (
-              <div
+              <article
                 key={site.siteId}
                 className={`site-observability-card${site.totalRequests > 0 ? "" : " site-observability-card--inactive"}`}
               >
+                {(() => {
+                  const expanded = expandedSiteIds.includes(site.siteId);
+                  const tone = getAvailabilityTone(site.availabilityPercent);
+                  const failureCount = Math.max(0, Math.round(site.failedCount || 0));
+                  return (
+                    <>
                 <div className="site-observability-card-top">
                   <div className="site-observability-card-title">
                     <span className="site-observability-site-name">
@@ -1149,27 +1218,37 @@ export default function Dashboard({
                         {site.platform}
                       </span>
                     )}
+                    <span className={tone.className}>{tone.label}</span>
                   </div>
-                  <Link
-                    to={buildSiteLast24hLogsRoute(site.siteId)}
-                    className="site-observability-log-link-compact"
-                    title="查看日志"
-                  >
-                    <svg
-                      width="14"
-                      height="14"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
+                  <div className="site-observability-card-actions">
+                    <button
+                      type="button"
+                      className="site-observability-toggle-btn site-observability-toggle-btn--card"
+                      onClick={() => toggleSiteExpanded(site.siteId)}
                     >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M9 5l7 7-7 7"
-                      />
-                    </svg>
-                  </Link>
+                      {expanded ? "收起" : "展开"}
+                    </button>
+                    <Link
+                      to={buildSiteLast24hLogsRoute(site.siteId)}
+                      className="site-observability-log-link-compact"
+                      title="查看日志"
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9 5l7 7-7 7"
+                        />
+                      </svg>
+                    </Link>
+                  </div>
                 </div>
                 <div className="site-observability-card-metrics">
                   <span
@@ -1194,8 +1273,29 @@ export default function Dashboard({
                   </span>
                   <span className="site-observability-metric-sep">·</span>
                   <span>{Math.round(site.totalRequests || 0)} 次</span>
+                  <span className="site-observability-metric-sep">·</span>
+                  <span>{failureCount} 失败</span>
                 </div>
-                <div className="site-availability-strip-compact">
+                {site.failureReasons?.length ? (
+                  <div className="site-observability-reason-strip">
+                    {site.failureReasons.map((reason) => (
+                      <span
+                        key={reason.label}
+                        className="site-observability-reason-chip"
+                        data-tooltip={`${reason.label} · ${reason.count} 次`}
+                      >
+                        {reason.label}
+                        <b>{reason.count}</b>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {expanded ? (
+                  <div className="site-observability-card-details">
+                    <div className="site-observability-card-detail-label">
+                      最近 24 小时
+                    </div>
+                    <div className="site-availability-strip-compact">
                   {site.buckets.map((bucket, index) => (
                     <Link
                       key={`${site.siteId}-${index}`}
@@ -1233,7 +1333,12 @@ export default function Dashboard({
                     />
                   ))}
                 </div>
-              </div>
+                  </div>
+                ) : null}
+                    </>
+                  );
+                })()}
+              </article>
             ))}
           </div>
         ) : (

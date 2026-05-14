@@ -31,6 +31,10 @@ import {
   listOauthRouteUnitMembersByUnitIds,
   loadOauthRouteUnitSummariesByIds,
 } from '../../services/oauth/routeUnitService.js';
+import {
+  buildPolicyForDownstreamKey,
+  getDownstreamApiKeyById,
+} from '../../services/downstreamApiKeyService.js';
 import { normalizeTokenRouteMode, type RouteMode } from '../../../shared/tokenRouteContract.js';
 import {
   parseRouteChannelBatchCreatePayload,
@@ -463,6 +467,7 @@ type BatchChannelPriorityUpdate = {
 
 type BatchRouteDecisionModels = {
   models: string[];
+  downstreamKeyId?: number;
   refreshPricingCatalog?: boolean;
   persistSnapshots?: boolean;
 };
@@ -472,15 +477,49 @@ type BatchRouteDecisionRouteModels = {
     routeId: number;
     model: string;
   }>;
+  downstreamKeyId?: number;
   refreshPricingCatalog?: boolean;
   persistSnapshots?: boolean;
 };
 
 type BatchRouteWideDecisionRouteIds = {
   routeIds: number[];
+  downstreamKeyId?: number;
   refreshPricingCatalog?: boolean;
   persistSnapshots?: boolean;
 };
+
+function normalizePositiveIntegerInput(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  const normalized = Math.trunc(numeric);
+  return normalized > 0 ? normalized : null;
+}
+
+async function resolveDownstreamPolicyForRequest(
+  rawDownstreamKeyId: unknown,
+): Promise<{ ok: true; downstreamKeyId: number | null; policy: Awaited<ReturnType<typeof buildPolicyForDownstreamKey>> | null } | {
+  ok: false;
+  statusCode: number;
+  message: string;
+}> {
+  const downstreamKeyId = normalizePositiveIntegerInput(rawDownstreamKeyId);
+  if (downstreamKeyId == null) {
+    return { ok: true, downstreamKeyId: null, policy: null };
+  }
+
+  const downstreamKey = await getDownstreamApiKeyById(downstreamKeyId);
+  if (!downstreamKey) {
+    return { ok: false, statusCode: 404, message: '下游密钥不存在' };
+  }
+
+  return {
+    ok: true,
+    downstreamKeyId,
+    policy: await buildPolicyForDownstreamKey(downstreamKey),
+  };
+}
 
 function parseBatchChannelUpdates(input: unknown): { ok: true; updates: BatchChannelPriorityUpdate[] } | { ok: false; message: string } {
   if (!input || typeof input !== 'object') {
@@ -523,7 +562,13 @@ function parseBatchChannelUpdates(input: unknown): { ok: true; updates: BatchCha
 
 function parseBatchRouteDecisionModels(
   input: unknown,
-): { ok: true; models: string[]; refreshPricingCatalog: boolean; persistSnapshots: boolean } | { ok: false; message: string } {
+): {
+  ok: true;
+  models: string[];
+  downstreamKeyId: number | null;
+  refreshPricingCatalog: boolean;
+  persistSnapshots: boolean;
+} | { ok: false; message: string } {
   if (!input || typeof input !== 'object') {
     return { ok: false, message: '请求体必须是对象' };
   }
@@ -551,6 +596,7 @@ function parseBatchRouteDecisionModels(
   return {
     ok: true,
     models: normalized,
+    downstreamKeyId: normalizePositiveIntegerInput((input as { downstreamKeyId?: unknown }).downstreamKeyId),
     refreshPricingCatalog: (input as { refreshPricingCatalog?: unknown }).refreshPricingCatalog === true,
     persistSnapshots: (input as { persistSnapshots?: unknown }).persistSnapshots === true,
   };
@@ -558,7 +604,13 @@ function parseBatchRouteDecisionModels(
 
 function parseBatchRouteDecisionRouteModels(
   input: unknown,
-): { ok: true; items: Array<{ routeId: number; model: string }>; refreshPricingCatalog: boolean; persistSnapshots: boolean } | { ok: false; message: string } {
+): {
+  ok: true;
+  items: Array<{ routeId: number; model: string }>;
+  downstreamKeyId: number | null;
+  refreshPricingCatalog: boolean;
+  persistSnapshots: boolean;
+} | { ok: false; message: string } {
   if (!input || typeof input !== 'object') {
     return { ok: false, message: '请求体必须是对象' };
   }
@@ -595,6 +647,7 @@ function parseBatchRouteDecisionRouteModels(
   return {
     ok: true,
     items: normalized,
+    downstreamKeyId: normalizePositiveIntegerInput((input as { downstreamKeyId?: unknown }).downstreamKeyId),
     refreshPricingCatalog: (input as { refreshPricingCatalog?: unknown }).refreshPricingCatalog === true,
     persistSnapshots: (input as { persistSnapshots?: unknown }).persistSnapshots === true,
   };
@@ -602,7 +655,13 @@ function parseBatchRouteDecisionRouteModels(
 
 function parseBatchRouteWideDecisionRouteIds(
   input: unknown,
-): { ok: true; routeIds: number[]; refreshPricingCatalog: boolean; persistSnapshots: boolean } | { ok: false; message: string } {
+): {
+  ok: true;
+  routeIds: number[];
+  downstreamKeyId: number | null;
+  refreshPricingCatalog: boolean;
+  persistSnapshots: boolean;
+} | { ok: false; message: string } {
   if (!input || typeof input !== 'object') {
     return { ok: false, message: '请求体必须是对象' };
   }
@@ -630,6 +689,7 @@ function parseBatchRouteWideDecisionRouteIds(
   return {
     ok: true,
     routeIds: normalized,
+    downstreamKeyId: normalizePositiveIntegerInput((input as { downstreamKeyId?: unknown }).downstreamKeyId),
     refreshPricingCatalog: (input as { refreshPricingCatalog?: unknown }).refreshPricingCatalog === true,
     persistSnapshots: (input as { persistSnapshots?: unknown }).persistSnapshots === true,
   };
@@ -953,13 +1013,18 @@ export async function tokensRoutes(app: FastifyInstance) {
     }));
   });
 
-  app.get<{ Querystring: { model?: string } }>('/api/routes/decision', async (request, reply) => {
+  app.get<{ Querystring: { model?: string; downstreamKeyId?: string } }>('/api/routes/decision', async (request, reply) => {
     const model = (request.query.model || '').trim();
     if (!model) {
       return reply.code(400).send({ success: false, message: 'model 不能为空' });
     }
 
-    const decision = await tokenRouter.explainSelection(model);
+    const policyResult = await resolveDownstreamPolicyForRequest(request.query.downstreamKeyId);
+    if (!policyResult.ok) {
+      return reply.code(policyResult.statusCode).send({ success: false, message: policyResult.message });
+    }
+
+    const decision = await tokenRouter.explainSelection(model, [], policyResult.policy ?? undefined);
     return { success: true, decision };
   });
 
@@ -967,6 +1032,11 @@ export async function tokensRoutes(app: FastifyInstance) {
     const parsed = parseBatchRouteDecisionModels(request.body);
     if (!parsed.ok) {
       return reply.code(400).send({ success: false, message: parsed.message });
+    }
+
+    const policyResult = await resolveDownstreamPolicyForRequest(parsed.downstreamKeyId);
+    if (!policyResult.ok) {
+      return reply.code(policyResult.statusCode).send({ success: false, message: policyResult.message });
     }
 
     const decisions: Record<string, Awaited<ReturnType<typeof tokenRouter.explainSelection>>> = {};
@@ -979,9 +1049,12 @@ export async function tokensRoutes(app: FastifyInstance) {
     const refreshedKeys = parsed.refreshPricingCatalog ? new Set<string>() : undefined;
     for (const model of parsed.models) {
       if (parsed.refreshPricingCatalog) {
-        await tokenRouter.refreshPricingReferenceCosts(model, { refreshedKeys });
+        await tokenRouter.refreshPricingReferenceCosts(model, {
+          refreshedKeys,
+          downstreamPolicy: policyResult.policy ?? undefined,
+        });
       }
-      decisions[model] = await tokenRouter.explainSelection(model);
+      decisions[model] = await tokenRouter.explainSelection(model, [], policyResult.policy ?? undefined);
     }
 
     if (parsed.persistSnapshots) {
@@ -1006,15 +1079,28 @@ export async function tokensRoutes(app: FastifyInstance) {
       return reply.code(400).send({ success: false, message: parsed.message });
     }
 
+    const policyResult = await resolveDownstreamPolicyForRequest(parsed.downstreamKeyId);
+    if (!policyResult.ok) {
+      return reply.code(policyResult.statusCode).send({ success: false, message: policyResult.message });
+    }
+
     const decisions: Record<string, Record<string, Awaited<ReturnType<typeof tokenRouter.explainSelectionForRoute>>>> = {};
     const refreshedKeys = parsed.refreshPricingCatalog ? new Set<string>() : undefined;
     for (const item of parsed.items) {
       const routeKey = String(item.routeId);
       if (!decisions[routeKey]) decisions[routeKey] = {};
       if (parsed.refreshPricingCatalog) {
-        await tokenRouter.refreshPricingReferenceCostsForRoute(item.routeId, item.model, { refreshedKeys });
+        await tokenRouter.refreshPricingReferenceCostsForRoute(item.routeId, item.model, {
+          refreshedKeys,
+          downstreamPolicy: policyResult.policy ?? undefined,
+        });
       }
-      decisions[routeKey][item.model] = await tokenRouter.explainSelectionForRoute(item.routeId, item.model);
+      decisions[routeKey][item.model] = await tokenRouter.explainSelectionForRoute(
+        item.routeId,
+        item.model,
+        [],
+        policyResult.policy ?? undefined,
+      );
     }
 
     if (parsed.persistSnapshots) {
@@ -1033,13 +1119,24 @@ export async function tokensRoutes(app: FastifyInstance) {
       return reply.code(400).send({ success: false, message: parsed.message });
     }
 
+    const policyResult = await resolveDownstreamPolicyForRequest(parsed.downstreamKeyId);
+    if (!policyResult.ok) {
+      return reply.code(policyResult.statusCode).send({ success: false, message: policyResult.message });
+    }
+
     const decisions: Record<string, Awaited<ReturnType<typeof tokenRouter.explainSelectionRouteWide>>> = {};
     const refreshedKeys = parsed.refreshPricingCatalog ? new Set<string>() : undefined;
     for (const routeId of parsed.routeIds) {
       if (parsed.refreshPricingCatalog) {
-        await tokenRouter.refreshRouteWidePricingReferenceCosts(routeId, { refreshedKeys });
+        await tokenRouter.refreshRouteWidePricingReferenceCosts(routeId, {
+          refreshedKeys,
+          downstreamPolicy: policyResult.policy ?? undefined,
+        });
       }
-      decisions[String(routeId)] = await tokenRouter.explainSelectionRouteWide(routeId);
+      decisions[String(routeId)] = await tokenRouter.explainSelectionRouteWide(
+        routeId,
+        policyResult.policy ?? undefined,
+      );
     }
 
     if (parsed.persistSnapshots) {

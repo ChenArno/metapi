@@ -165,6 +165,53 @@ describe('TokenRouter site status guard', () => {
     expect(selected?.tokenValue).toBe('oauth-access-token');
   });
 
+  it('does not treat checkin-only degraded health as a proxy routing block', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'checkin-degraded-site',
+      url: 'https://checkin-degraded.example.com',
+      platform: 'new-api',
+      status: 'active',
+    }).returning().get();
+
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'checkin-degraded-user',
+      accessToken: 'checkin-degraded-access',
+      apiToken: 'sk-checkin-degraded',
+      status: 'active',
+      extraConfig: JSON.stringify({
+        runtimeHealth: {
+          state: 'degraded',
+          reason: 'checkin endpoint not found',
+          source: 'checkin',
+        },
+      }),
+    }).returning().get();
+
+    const route = await db.insert(schema.tokenRoutes).values({
+      modelPattern: 'gpt-4.1-mini',
+      enabled: true,
+    }).returning().get();
+
+    const channel = await db.insert(schema.routeChannels).values({
+      routeId: route.id,
+      accountId: account.id,
+      tokenId: null,
+      priority: 0,
+      weight: 10,
+      enabled: true,
+      manualOverride: false,
+    }).returning().get();
+
+    const router = new TokenRouter();
+    const selected = await router.selectChannel('gpt-4.1-mini');
+    const decision = await router.explainSelection('gpt-4.1-mini');
+
+    expect(selected?.channel.id).toBe(channel.id);
+    expect(decision.selectedChannelId).toBe(channel.id);
+    expect(decision.candidates.find((item) => item.channelId === channel.id)?.eligible).toBe(true);
+  });
+
   it('prefers codex oauth access token over a stale legacy api token on oauth-managed rows', async () => {
     const site = await db.insert(schema.sites).values({
       name: 'codex-site',

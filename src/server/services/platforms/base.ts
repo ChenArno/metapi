@@ -40,6 +40,7 @@ export interface BalanceInfo {
 interface LoginResult {
   success: boolean;
   accessToken?: string;
+  platformUserId?: number;
   username?: string;
   message?: string;
 }

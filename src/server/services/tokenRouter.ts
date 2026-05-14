@@ -1448,6 +1448,24 @@ function isModelAllowedByDownstreamPolicy(requestedModel: string, policy: Downst
   return false;
 }
 
+function describeDownstreamPolicy(policy: DownstreamRoutingPolicy): string | null {
+  const parts: string[] = [];
+  if (policy.allowedRouteIds.length > 0) {
+    parts.push(`限定路由 ${policy.allowedRouteIds.length}`);
+  }
+  if (policy.allowedSiteIds.length > 0) {
+    parts.push(`站点池 ${policy.allowedSiteIds.length}`);
+  }
+  if (policy.excludedSiteIds.length > 0) {
+    parts.push(`排除站点 ${policy.excludedSiteIds.length}`);
+  }
+  if (policy.excludedCredentialRefs.length > 0) {
+    parts.push(`排除凭证 ${policy.excludedCredentialRefs.length}`);
+  }
+  if (parts.length === 0) return null;
+  return `下游策略：${parts.join('，')}`;
+}
+
 function parseModelMappingRecord(modelMapping?: string | Record<string, unknown> | null): Record<string, unknown> | null {
   if (!modelMapping) return null;
   if (typeof modelMapping === 'object' && !Array.isArray(modelMapping)) {
@@ -1992,6 +2010,10 @@ export class TokenRouter {
         ? '路由策略：轮询'
         : (routeStrategy === 'stable_first' ? '路由策略：稳定优先' : '路由策略：按权重随机'),
     ];
+    const downstreamPolicySummary = describeDownstreamPolicy(downstreamPolicy);
+    if (downstreamPolicySummary) {
+      summary.push(downstreamPolicySummary);
+    }
     if (requestedByDisplayName) {
       summary.push(`按显示名命中：${normalizeRouteDisplayName(match.route.displayName)}`);
       summary.push('显示名仅用于聚合展示，实际转发模型按选中通道来源模型决定');

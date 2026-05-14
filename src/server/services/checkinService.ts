@@ -92,7 +92,10 @@ function inferRewardFromBalanceDelta(previousBalance: unknown, latestBalance: un
   return Math.round(delta * 1_000_000) / 1_000_000;
 }
 
-async function tryAutoRelogin(account: any, site: any): Promise<string | null> {
+async function tryAutoRelogin(
+  account: any,
+  site: any,
+): Promise<{ accessToken: string; platformUserId?: number } | null> {
   const adapter = getAdapter(site.platform);
   if (!adapter) return null;
 
@@ -108,16 +111,26 @@ async function tryAutoRelogin(account: any, site: any): Promise<string | null> {
   );
   if (!result.success || !result.accessToken) return null;
 
+  const nextPlatformUserId = typeof result.platformUserId === 'number' && Number.isFinite(result.platformUserId) && result.platformUserId > 0
+    ? Math.trunc(result.platformUserId)
+    : undefined;
+
   await db.update(schema.accounts)
     .set({
       accessToken: result.accessToken,
+      extraConfig: nextPlatformUserId
+        ? mergeAccountExtraConfig(account.extraConfig, { platformUserId: nextPlatformUserId })
+        : account.extraConfig,
       updatedAt: new Date().toISOString(),
       status: account.status === 'expired' ? 'active' : account.status,
     })
     .where(eq(schema.accounts.id, account.id))
     .run();
 
-  return result.accessToken;
+  return {
+    accessToken: result.accessToken,
+    platformUserId: nextPlatformUserId,
+  };
 }
 
 export async function checkinAccount(accountId: number, options?: { skipEvent?: boolean; scheduleMode?: 'cron' | 'interval' }) {
@@ -183,11 +196,12 @@ export async function checkinAccount(accountId: number, options?: { skipEvent?: 
     () => adapter.checkin(site.url, activeAccessToken, platformUserId));
 
   if (!result.success && shouldAttemptAutoRelogin(result.message)) {
-    const refreshedAccessToken = await tryAutoRelogin(account, site);
-    if (refreshedAccessToken) {
-      activeAccessToken = refreshedAccessToken;
+    const refreshedSession = await tryAutoRelogin(account, site);
+    if (refreshedSession) {
+      activeAccessToken = refreshedSession.accessToken;
+      const retriedPlatformUserId = refreshedSession.platformUserId ?? platformUserId;
       result = await withAccountProxyOverride(accountProxyUrl,
-        () => adapter.checkin(site.url, activeAccessToken, platformUserId));
+        () => adapter.checkin(site.url, activeAccessToken, retriedPlatformUserId));
     }
   }
 

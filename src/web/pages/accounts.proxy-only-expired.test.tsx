@@ -102,4 +102,55 @@ describe('Accounts proxy-only expired state', () => {
       root?.unmount();
     }
   });
+
+  it('separates api and checkin status copy on account cards', async () => {
+    apiMock.getAccounts.mockResolvedValue([
+      {
+        id: 2,
+        username: 'split-status-user',
+        balance: 0,
+        balanceUsed: 0,
+        todayReward: 0,
+        todaySpend: 0,
+        accessToken: 'session-token',
+        status: 'active',
+        checkinEnabled: true,
+        runtimeHealth: {
+          state: 'degraded',
+          source: 'checkin',
+          reason: 'checkin endpoint not found',
+        },
+        capabilities: {
+          canCheckin: true,
+          canRefreshBalance: true,
+          proxyOnly: false,
+        },
+        siteId: 11,
+        site: { id: 11, name: 'split-status-site', status: 'active', url: 'https://example.com' },
+      },
+    ]);
+    apiMock.getSites.mockResolvedValue([{ id: 11, name: 'split-status-site', platform: 'new-api', status: 'active' }]);
+
+    let root!: WebTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter initialEntries={['/accounts']}>
+            <ToastProvider>
+              <Accounts />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+
+      const rendered = JSON.stringify(root.toJSON());
+      expect(rendered).toContain('API');
+      expect(rendered).toContain('签到');
+      expect(rendered).toContain('checkin endpoint not found');
+      expect(rendered).toContain('未单独检测');
+    } finally {
+      root?.unmount();
+    }
+  });
 });

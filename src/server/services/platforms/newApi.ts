@@ -938,7 +938,7 @@ export class NewApiAdapter extends BasePlatformAdapter {
     baseUrl: string,
     username: string,
     password: string,
-  ): Promise<{ success: boolean; accessToken?: string; username?: string; message?: string }> {
+  ): Promise<{ success: boolean; accessToken?: string; platformUserId?: number; username?: string; message?: string }> {
     try {
       const { data: res, cookieHeader } = await this.fetchJsonRawWithCookie<any>(`${baseUrl}/api/user/login`, {
         method: 'POST',
@@ -953,16 +953,26 @@ export class NewApiAdapter extends BasePlatformAdapter {
 
       const accessToken = this.extractLoginAccessToken(res);
       if (res?.success && accessToken) {
+        const rawUserId = res?.data?.id;
+        const platformUserId = typeof rawUserId === 'number'
+          ? rawUserId
+          : (typeof rawUserId === 'string' ? Number.parseInt(rawUserId, 10) : Number.NaN);
         return {
           success: true,
           accessToken,
+          platformUserId: Number.isFinite(platformUserId) && platformUserId > 0 ? platformUserId : undefined,
           username,
         };
       }
       if (res?.success && this.hasUsableSessionCookie(cookieHeader)) {
+        const rawUserId = res?.data?.id;
+        const platformUserId = typeof rawUserId === 'number'
+          ? rawUserId
+          : (typeof rawUserId === 'string' ? Number.parseInt(rawUserId, 10) : Number.NaN);
         return {
           success: true,
           accessToken: cookieHeader,
+          platformUserId: Number.isFinite(platformUserId) && platformUserId > 0 ? platformUserId : undefined,
           username,
         };
       }

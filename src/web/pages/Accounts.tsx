@@ -795,32 +795,117 @@ function AccountsConnectionSurface({
     },
   };
 
-  const resolveRuntimeHealth = (account: any) => {
-    if (account.status === "expired") {
-      return {
-        ...runtimeHealthMap.unhealthy,
-        label: "已过期",
-        reason: account.runtimeHealth?.reason || "连接凭证已过期，请更新凭证",
-      };
-    }
-    const capabilities = resolveAccountCapabilities(account);
-    const fallbackState =
-      account.status === "disabled" || account.site?.status === "disabled"
-        ? "disabled"
-        : !capabilities.proxyOnly && account.status === "expired"
-          ? "unhealthy"
-          : "unknown";
-    const state = account.runtimeHealth?.state || fallbackState;
+  const buildHealthBadge = (
+    state: string,
+    reason: string,
+    overrides?: Partial<{
+      label: string;
+      cls: string;
+      dotClass: string;
+      pulse: boolean;
+    }>,
+  ) => {
     const cfg = runtimeHealthMap[state] || runtimeHealthMap.unknown;
-    const reason =
-      account.runtimeHealth?.reason ||
-      (state === "disabled"
-        ? "账号或站点已禁用"
-        : state === "unhealthy"
-          ? "最近健康检查失败"
-          : "尚未获取运行健康信息");
-    return { state, reason, ...cfg };
+    return {
+      state,
+      reason,
+      label: overrides?.label || cfg.label,
+      cls: overrides?.cls || cfg.cls,
+      dotClass: overrides?.dotClass || cfg.dotClass,
+      pulse: overrides?.pulse ?? cfg.pulse,
+    };
   };
+
+  const resolveApiRuntimeHealth = (account: any) => {
+    const capabilities = resolveAccountCapabilities(account);
+    if (account.status === "expired") {
+      return buildHealthBadge(
+        "unhealthy",
+        account.runtimeHealth?.reason || "连接凭证已过期，请更新凭证",
+        { label: "已过期" },
+      );
+    }
+    if (account.status === "disabled" || account.site?.status === "disabled") {
+      return buildHealthBadge("disabled", "账号或站点已禁用");
+    }
+    const source = String(account.runtimeHealth?.source || "").toLowerCase();
+    if (!account.runtimeHealth?.state) {
+      return buildHealthBadge(
+        capabilities.proxyOnly ? "healthy" : "unknown",
+        capabilities.proxyOnly ? "当前连接用于 API 转发" : "尚未获取 API 运行信息",
+        capabilities.proxyOnly ? { label: "可转发" } : undefined,
+      );
+    }
+    if (source === "checkin") {
+      return buildHealthBadge(
+        capabilities.proxyOnly ? "healthy" : "unknown",
+        "当前异常仅来自签到链路，未作为 API 转发异常处理",
+        capabilities.proxyOnly ? { label: "可转发" } : { label: "未单独检测" },
+      );
+    }
+    if (account.runtimeHealth.state === "healthy") {
+      return buildHealthBadge("healthy", account.runtimeHealth?.reason || "API 转发正常", {
+        label: "可转发",
+      });
+    }
+    return buildHealthBadge(
+      account.runtimeHealth.state,
+      account.runtimeHealth?.reason || "API 运行状态异常",
+      account.runtimeHealth.state === "unhealthy" ? { label: "异常" } : { label: "降级" },
+    );
+  };
+
+  const resolveCheckinRuntimeHealth = (account: any) => {
+    const capabilities = resolveAccountCapabilities(account);
+    if (!capabilities.canCheckin) {
+      return buildHealthBadge("disabled", "当前连接不支持签到", { label: "不支持" });
+    }
+    if (account.checkinEnabled === false) {
+      return buildHealthBadge("disabled", "已关闭自动签到", { label: "已关闭" });
+    }
+    if (account.status === "expired") {
+      return buildHealthBadge(
+        "unhealthy",
+        account.runtimeHealth?.reason || "连接凭证已过期，请重新绑定后再签到",
+        { label: "已过期" },
+      );
+    }
+    if (account.status === "disabled" || account.site?.status === "disabled") {
+      return buildHealthBadge("disabled", "账号或站点已禁用", { label: "已禁用" });
+    }
+    const source = String(account.runtimeHealth?.source || "").toLowerCase();
+    if (source === "checkin" && account.runtimeHealth?.state) {
+      return buildHealthBadge(
+        account.runtimeHealth.state,
+        account.runtimeHealth?.reason || "签到链路状态已更新",
+      );
+    }
+    return buildHealthBadge("healthy", "已开启自动签到，等待下一次执行", { label: "已开启" });
+  };
+
+  const renderHealthBadge = (health: {
+    label: string;
+    cls: string;
+    dotClass: string;
+    pulse: boolean;
+  }) => (
+    <span
+      className={`badge ${health.cls}`}
+      style={{
+        fontSize: 11,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        width: "fit-content",
+      }}
+    >
+      <span
+        className={`status-dot ${health.dotClass} ${health.pulse ? "animate-pulse-dot" : ""}`}
+        style={{ marginRight: 0 }}
+      />
+      {health.label}
+    </span>
+  );
 
   const resolveAccountCapabilities = (account: any) => {
     const fromServer = account?.capabilities;
@@ -2720,12 +2805,13 @@ function AccountsConnectionSurface({
                   {visibleAccounts.map((a: any) => {
                     const capabilities = resolveAccountCapabilities(a);
                     const connectionMode = resolveAccountCredentialMode(a);
-                    const health = resolveRuntimeHealth(a);
+                    const apiHealth = resolveApiRuntimeHealth(a);
+                    const checkinHealth = resolveCheckinRuntimeHealth(a);
                     const isExpanded = expandedAccountIds.includes(a.id);
                     const hintMessage =
                       a.status === "expired" && !capabilities.proxyOnly
                         ? "账号已过期，请重新绑定"
-                        : health.reason || "-";
+                        : `${apiHealth.reason || "-"} / ${checkinHealth.reason || "-"}`;
                     return (
                       <MobileCard
                         key={a.id}
@@ -2785,31 +2871,32 @@ function AccountsConnectionSurface({
                         }
                       >
                         <MobileField
-                          label="运行健康状态"
+                          label="连接状态"
                           value={
                             <div
                               style={{
                                 display: "flex",
                                 flexDirection: "column",
-                                gap: 4,
+                                gap: 6,
                               }}
                             >
-                              <span
-                                className={`badge ${health.cls}`}
+                              <div
                                 style={{
-                                  fontSize: 11,
-                                  display: "inline-flex",
+                                  display: "flex",
+                                  flexWrap: "wrap",
                                   alignItems: "center",
-                                  gap: 4,
-                                  width: "fit-content",
+                                  gap: 6,
                                 }}
                               >
-                                <span
-                                  className={`status-dot ${health.dotClass} ${health.pulse ? "animate-pulse-dot" : ""}`}
-                                  style={{ marginRight: 0 }}
-                                />
-                                {health.label}
-                              </span>
+                                <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+                                  API
+                                </span>
+                                {renderHealthBadge(apiHealth)}
+                                <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+                                  签到
+                                </span>
+                                {renderHealthBadge(checkinHealth)}
+                              </div>
                               <span
                                 style={{
                                   fontSize: 11,
@@ -2819,9 +2906,11 @@ function AccountsConnectionSurface({
                                   textOverflow: "ellipsis",
                                   whiteSpace: "nowrap",
                                 }}
-                                data-tooltip={health.reason}
+                                data-tooltip={`${apiHealth.reason} / ${checkinHealth.reason}`}
                               >
-                                {health.reason}
+                                {apiHealth.reason}
+                                {" / "}
+                                {checkinHealth.reason}
                               </span>
                             </div>
                           }
@@ -2886,7 +2975,7 @@ function AccountsConnectionSurface({
                               }
                             />
                             <MobileField
-                              label="签到"
+                              label="签到开关"
                               value={
                                 capabilities.canCheckin ? (
                                   <button
@@ -2924,6 +3013,14 @@ function AccountsConnectionSurface({
                                   </span>
                                 )
                               }
+                            />
+                            <MobileField
+                              label="API 状态"
+                              value={renderHealthBadge(apiHealth)}
+                            />
+                            <MobileField
+                              label="签到状态"
+                              value={renderHealthBadge(checkinHealth)}
                             />
                             <MobileField
                               label="账号状态"
@@ -3064,7 +3161,7 @@ function AccountsConnectionSurface({
                       </th>
                       <th>连接名称</th>
                       <th>站点</th>
-                      <th>运行健康状态</th>
+                      <th>连接状态</th>
                       <th>余额</th>
                       <th>已用</th>
                       <th>签到</th>
@@ -3129,43 +3226,47 @@ function AccountsConnectionSurface({
                           </td>
                           <td>
                             {(() => {
-                              const health = resolveRuntimeHealth(a);
+                              const apiHealth = resolveApiRuntimeHealth(a);
+                              const checkinHealth = resolveCheckinRuntimeHealth(a);
                               return (
                                 <div
                                   style={{
                                     display: "flex",
                                     flexDirection: "column",
-                                    gap: 4,
+                                    gap: 6,
                                   }}
                                 >
-                                  <span
-                                    className={`badge ${health.cls}`}
+                                  <div
                                     style={{
-                                      fontSize: 11,
-                                      display: "inline-flex",
+                                      display: "flex",
+                                      flexWrap: "wrap",
                                       alignItems: "center",
-                                      gap: 4,
-                                      width: "fit-content",
+                                      gap: 6,
                                     }}
                                   >
-                                    <span
-                                      className={`status-dot ${health.dotClass} ${health.pulse ? "animate-pulse-dot" : ""}`}
-                                      style={{ marginRight: 0 }}
-                                    />
-                                    {health.label}
-                                  </span>
+                                    <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+                                      API
+                                    </span>
+                                    {renderHealthBadge(apiHealth)}
+                                    <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+                                      签到
+                                    </span>
+                                    {renderHealthBadge(checkinHealth)}
+                                  </div>
                                   <span
                                     style={{
                                       fontSize: 11,
                                       color: "var(--color-text-muted)",
-                                      maxWidth: 200,
+                                      maxWidth: 260,
                                       overflow: "hidden",
                                       textOverflow: "ellipsis",
                                       whiteSpace: "nowrap",
                                     }}
-                                    data-tooltip={health.reason}
+                                    data-tooltip={`${apiHealth.reason} / ${checkinHealth.reason}`}
                                   >
-                                    {health.reason}
+                                    {apiHealth.reason}
+                                    {" / "}
+                                    {checkinHealth.reason}
                                   </span>
                                 </div>
                               );
