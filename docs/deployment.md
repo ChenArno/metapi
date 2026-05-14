@@ -172,10 +172,32 @@ vim .env
 docker compose up -d --build
 ```
 
+### 便携镜像包部署（推荐给 NAS / 服务器手动更新）
+
+仓库根目录内置了 [docker-compose.yml](/Users/chenzhixin/mywork/ai/capi/docker-compose.yml)，默认使用固定镜像标签 `metapi-portable:linux-amd64`。
+
+这样你每次只需要重新导入新的 tar 包，不需要再手动 `docker tag` 或改 compose 里的镜像名。
+
+```bash
+docker load -i metapi-portable_linux-amd64.tar
+docker compose -f docker-compose.yml up -d --force-recreate
+```
+
+如果需要清理旧容器再重建：
+
+```bash
+docker compose -f docker-compose.yml down
+docker compose -f docker-compose.yml up -d --force-recreate
+```
+
 ### 使用 `.env` 文件
 
-仓库根目录已经内置了 [compose.yml](/Users/chenzhixin/mywork/agent/metapi/compose.yml)。
-默认行为：
+仓库根目录已经内置两份 Compose 文件：
+
+- [compose.yml](/Users/chenzhixin/mywork/ai/capi/compose.yml)：面向本地源码构建与开发
+- [docker-compose.yml](/Users/chenzhixin/mywork/ai/capi/docker-compose.yml)：面向导入 tar 后的部署镜像
+
+`compose.yml` 默认行为：
 
 - 从当前仓库代码构建镜像，而不是拉旧的远端 `latest`
 - 持久化目录挂载到 `./data`
