@@ -175,6 +175,44 @@ describe('checkinService auto relogin', () => {
     }));
   });
 
+  it('retries checkin once after auto relogin when upstream returns english unauthorized missing-token text', async () => {
+    selectAllMock.mockReturnValue([
+      {
+        accounts: {
+          id: 11,
+          username: 'linuxdo_7043',
+          accessToken: 'expired-token',
+          status: 'active',
+          extraConfig: JSON.stringify({
+            autoRelogin: { username: 'linuxdo_7043', passwordCipher: 'cipher' },
+            platformUserId: 7043,
+          }),
+        },
+        sites: {
+          id: 5,
+          name: 'demo',
+          url: 'https://demo.example.com',
+          platform: 'new-api',
+        },
+      },
+    ]);
+
+    adapterMock.checkin
+      .mockResolvedValueOnce({ success: false, message: 'Unauthorized, not logged in and no access token provided' })
+      .mockResolvedValueOnce({ success: true, message: 'checked in' });
+    decryptPasswordMock.mockReturnValue('plain-password');
+    adapterMock.login.mockResolvedValue({ success: true, accessToken: 'fresh-token' });
+
+    const { checkinAccount } = await import('./checkinService.js');
+    const result = await checkinAccount(11);
+
+    expect(result.success).toBe(true);
+    expect(adapterMock.login).toHaveBeenCalledTimes(1);
+    expect(adapterMock.checkin).toHaveBeenCalledTimes(2);
+    expect(adapterMock.checkin.mock.calls[0][2]).toBe(7043);
+    expect(adapterMock.checkin.mock.calls[1][1]).toBe('fresh-token');
+  });
+
   it('passes guessed platform user id when config does not include it', async () => {
     selectAllMock.mockReturnValue([
       {
@@ -320,6 +358,68 @@ describe('checkinService auto relogin', () => {
     expect(result.success).toBe(true);
     expect(result.status).toBe('success');
     expect(updateSetMock).not.toHaveBeenCalledWith(expect.objectContaining({ lastCheckinAt: expect.any(String) }));
+  });
+
+  it('skips cron checkin locally when the account was already checked in today', async () => {
+    selectAllMock.mockReturnValue([
+      {
+        accounts: {
+          id: 19,
+          username: 'cron-dedupe',
+          accessToken: 'token',
+          status: 'active',
+          lastCheckinAt: new Date().toISOString(),
+          extraConfig: null,
+        },
+        sites: {
+          id: 19,
+          name: 'demo',
+          url: 'https://example.com',
+          platform: 'new-api',
+        },
+      },
+    ]);
+
+    const { checkinAccount } = await import('./checkinService.js');
+    const result = await checkinAccount(19, { scheduleMode: 'cron' });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('skipped');
+    expect(result.reason).toBe('already_checked_in_today');
+    expect(adapterMock.checkin).not.toHaveBeenCalled();
+    const firstInsertPayload = insertValuesMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(firstInsertPayload?.status).toBe('skipped');
+    expect(firstInsertPayload?.message).toBe('Already checked in today; cron check-in skipped locally');
+  });
+
+  it('does not apply same-day local skip in interval mode', async () => {
+    selectAllMock.mockReturnValue([
+      {
+        accounts: {
+          id: 20,
+          username: 'interval-no-day-dedupe',
+          accessToken: 'token',
+          status: 'active',
+          lastCheckinAt: new Date().toISOString(),
+          extraConfig: null,
+        },
+        sites: {
+          id: 20,
+          name: 'demo',
+          url: 'https://example.com',
+          platform: 'new-api',
+        },
+      },
+    ]);
+
+    adapterMock.checkin.mockResolvedValue({ success: true, message: '签到成功' });
+
+    const { checkinAccount } = await import('./checkinService.js');
+    const result = await checkinAccount(20, { scheduleMode: 'interval' });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe('success');
+    expect(adapterMock.checkin).toHaveBeenCalledTimes(1);
   });
 
   it('advances lastCheckinAt when interval mode gets a direct success', async () => {

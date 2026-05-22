@@ -16,13 +16,40 @@ import {
 } from './accountExtraConfig.js';
 import { decryptAccountPassword } from './accountCredentialService.js';
 import { setAccountRuntimeHealth } from './accountHealthService.js';
-import { formatUtcSqlDateTime } from './localTimeService.js';
+import { formatLocalDate, formatUtcSqlDateTime, toLocalDayKeyFromStoredUtc } from './localTimeService.js';
 import { withAccountProxyOverride } from './siteProxy.js';
 
 type CheckinExecutionStatus = 'success' | 'failed' | 'skipped';
+type CheckinCapabilities = {
+  canCheckin: boolean;
+  proxyOnly: boolean;
+};
 
 function isSiteDisabled(status?: string | null): boolean {
   return (status || 'active') === 'disabled';
+}
+
+function wasCheckedInToday(lastCheckinAt?: string | null, now = new Date()): boolean {
+  const lastCheckinDay = toLocalDayKeyFromStoredUtc(lastCheckinAt);
+  return !!lastCheckinDay && lastCheckinDay === formatLocalDate(now);
+}
+
+function hasSessionTokenValue(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function resolveCheckinCapabilities(account: typeof schema.accounts.$inferSelect): CheckinCapabilities {
+  const extra = String(account.extraConfig || '').toLowerCase();
+  const credentialMode = extra.includes('"credentialmode":"apikey"')
+    ? 'apikey'
+    : (extra.includes('"credentialmode":"session"') ? 'session' : 'auto');
+  const sessionCapable = credentialMode === 'apikey'
+    ? false
+    : hasSessionTokenValue(account.accessToken);
+  return {
+    canCheckin: sessionCapable,
+    proxyOnly: !sessionCapable,
+  };
 }
 
 function isAlreadyCheckedInMessage(message?: string | null): boolean {
@@ -75,6 +102,10 @@ function shouldAttemptAutoRelogin(message?: string | null): boolean {
   const text = message.toLowerCase();
   if (text.includes('new-api-user')) return true;
   if (text.includes('access token')) return true;
+  if (text.includes('unauthorized')) return true;
+  if (text.includes('forbidden')) return true;
+  if (text.includes('not login')) return true;
+  if (text.includes('not logged')) return true;
   return false;
 }
 
@@ -145,6 +176,7 @@ export async function checkinAccount(accountId: number, options?: { skipEvent?: 
 
   const account = rows[0].accounts;
   const site = rows[0].sites;
+  const capabilities = resolveCheckinCapabilities(account);
 
   if (isSiteDisabled(site.status)) {
     const createdAt = formatUtcSqlDateTime(new Date());
@@ -178,6 +210,76 @@ export async function checkinAccount(accountId: number, options?: { skipEvent?: 
       skipped: true,
       reason: 'site_disabled',
       message: 'site disabled',
+    };
+  }
+
+  if (options?.scheduleMode === 'cron' && wasCheckedInToday(account.lastCheckinAt)) {
+    const createdAt = formatUtcSqlDateTime(new Date());
+    setAccountRuntimeHealth(account.id, {
+      state: 'healthy',
+      reason: '今日已签到，定时任务已跳过',
+      source: 'checkin',
+    });
+    await db.insert(schema.checkinLogs).values({
+      accountId: account.id,
+      status: 'skipped',
+      message: 'Already checked in today; cron check-in skipped locally',
+      createdAt,
+    }).run();
+
+    if (!options?.skipEvent) {
+      await db.insert(schema.events).values({
+        type: 'checkin',
+        title: 'checkin skipped',
+        message: `${account.username || 'ID:' + accountId} @ ${site.name}: already checked in today`,
+        level: 'info',
+        relatedId: accountId,
+        relatedType: 'account',
+        createdAt,
+      }).run();
+    }
+
+    return {
+      success: true,
+      status: 'skipped' as const,
+      skipped: true,
+      reason: 'already_checked_in_today',
+      message: 'Already checked in today; cron check-in skipped locally',
+    };
+  }
+
+  if (!capabilities.canCheckin) {
+    const createdAt = formatUtcSqlDateTime(new Date());
+    setAccountRuntimeHealth(account.id, {
+      state: 'degraded',
+      reason: '当前连接不支持签到',
+      source: 'checkin',
+    });
+    await db.insert(schema.checkinLogs).values({
+      accountId: account.id,
+      status: 'skipped',
+      message: 'Check-in is not supported for proxy-only credentials',
+      createdAt,
+    }).run();
+
+    if (!options?.skipEvent) {
+      await db.insert(schema.events).values({
+        type: 'checkin',
+        title: 'checkin skipped',
+        message: `${account.username || 'ID:' + accountId} @ ${site.name}: proxy-only credentials do not support check-in`,
+        level: 'info',
+        relatedId: accountId,
+        relatedType: 'account',
+        createdAt,
+      }).run();
+    }
+
+    return {
+      success: true,
+      status: 'skipped' as const,
+      skipped: true,
+      reason: 'checkin_not_supported_for_proxy_only_credentials',
+      message: 'Check-in is not supported for proxy-only credentials',
     };
   }
 
